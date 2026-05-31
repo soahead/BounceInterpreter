@@ -140,6 +140,52 @@ const EXAMPLES = [
   { label: "DMARC report", text: `A message from your domain has failed DMARC evaluation.\n\nSource-IP: 203.0.113.10\nDomain: example.com\nDKIM: fail\nSPF: pass\nDMARC: fail (p=reject)\nDisposition: reject` },
 ];
 
+const DELIST_URLS = {
+  "Spamhaus ZEN":   "https://check.spamhaus.org/",
+  "SpamCop":        "https://www.spamcop.net/bl.shtml",
+  "SORBS":          "http://www.sorbs.net/lookup.shtml",
+  "Barracuda":      "https://www.barracudacentral.org/rbl/removal-request",
+  "UCEProtect L1":  "https://www.uceprotect.net/en/rblcheck.php",
+  "UCEProtect L2":  "https://www.uceprotect.net/en/rblcheck.php",
+  "UCEProtect L3":  "https://www.uceprotect.net/en/rblcheck.php",
+  "MAPS BL":        "https://www.emailbasura.org/",
+  "Spam Champuru":  "http://www.spam-champuru.net/",
+  "MAPS Blackholes":"https://www.mail-abuse.com/cgi-bin/lookup",
+  "MAPS Relays":    "https://www.mail-abuse.com/cgi-bin/lookup",
+};
+
+function DelistPanel({ blacklists }) {
+  if (!blacklists || blacklists.length === 0) return null;
+  return (
+    <div className="sec" style={{marginBottom:"var(--sp-sm)"}}>
+      <div className="sec-hd" style={{background:"var(--c-red-bg)",borderColor:"var(--c-red-bd)",cursor:"default",borderRadius:"var(--r-md) var(--r-md) 0 0"}}>
+        <span className="sec-title" style={{color:"var(--c-red)"}}>⚠ Blacklist Detected — Delisting Required</span>
+      </div>
+      <div className="sec-bd" style={{borderColor:"var(--c-red-bd)"}}>
+        <div style={{padding:"var(--sp-sm) var(--sp-md)"}}>
+          {blacklists.map((bl, i) => {
+            const url = DELIST_URLS[bl.name];
+            return (
+              <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"var(--sp-md)",padding:"var(--sp-sm) 0",borderBottom: i < blacklists.length - 1 ? "1px solid var(--c-red-bd)" : "none"}}>
+                <div>
+                  <div style={{fontFamily:"var(--f-mono)",fontSize:12,fontWeight:500,color:"var(--c-red)"}}>{bl.name}</div>
+                  {bl.ip && <div style={{fontFamily:"var(--f-mono)",fontSize:10,color:"var(--c-secondary)",marginTop:2}}>{bl.ip}</div>}
+                </div>
+                {url
+                  ? <a href={url} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:4,background:"var(--c-red)",color:"#fff",border:"none",borderRadius:"var(--r-sm)",fontFamily:"var(--f-mono)",fontSize:10,fontWeight:600,letterSpacing:"0.08em",textTransform:"uppercase",padding:"6px 12px",textDecoration:"none",whiteSpace:"nowrap",transition:"background 0.15s"}}>
+                      Request Delisting ↗
+                    </a>
+                  : <span style={{fontFamily:"var(--f-mono)",fontSize:10,color:"var(--c-secondary)"}}>Manual review required</span>
+                }
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Section({ title, children, defaultOpen = true }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -184,6 +230,7 @@ function DiagResult({ data }) {
           {data.rootCause && <div className="prose-cause">{data.rootCause}</div>}
         </div>
       </Section>
+      <DelistPanel blacklists={data.blacklists} />
       {data.evidence?.length > 0 && (
         <Section title="Evidence">
           <div className="ev-wrap">
