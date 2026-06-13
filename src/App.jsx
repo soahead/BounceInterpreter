@@ -459,7 +459,6 @@ export default function App() {
         throw new Error("Unexpected response shape: " + rawText.slice(0, 300));
       }
       setResult(data);
-      if (!data || !data.verdict) setError("Bad shape: " + JSON.stringify(data).slice(0, 300));
       setHistory(h => [{ snippet: input.trim().slice(0, 72) + (input.length > 72 ? "\u2026" : ""), result: data, time: new Date() }, ...h].slice(0, 8));
     } catch (e) {
       setError(e.message);
