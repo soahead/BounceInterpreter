@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 const STYLE = `
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&family=DM+Sans:wght@400;500&display=swap');
@@ -251,9 +251,9 @@ function FollowUpChat({ diagnosisContext, onReplyUpdated }) {
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [thinking, setThinking] = useState(false);
-  const logRef = React.useRef(null);
+  const logRef = useRef(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [messages, thinking]);
 
