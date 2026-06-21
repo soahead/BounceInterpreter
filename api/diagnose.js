@@ -10,30 +10,120 @@ module.exports = async function handler(req, res) {
 
   const body = req.body;
 
-  // ── Chat mode ────────────────────────────────────────────────────
+  // ── Follow-up chat branch ──────────────────────────────────────────────
   if (body.chat === true) {
     const { context, messages } = body;
-
-    if (!context || !Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: "chat mode requires context and messages" });
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "Missing messages array" });
     }
 
-    const systemPrompt = `You are a senior email deliverability and DNS specialist at Exact Hosting, assisting a support technician with a follow-up conversation about a bounce message diagnosis.
+    const systemPrompt = `You are an email deliverability expert assisting a support agent at Exact Hosting.
+You have already diagnosed a bounce/NDR message. The full diagnosis JSON is provided as context.
+Answer the agent's follow-up questions concisely and accurately.
+If asked to redraft the customer reply, return JSON with keys "reply" (your answer) and "updatedCustomerReply" (the new reply text).
+Otherwise return JSON with key "reply" only.
+The customer reply should be warm, peer-to-peer, under 120 words, signed as Adrian, no corporate filler.
+Start your response with { and end with }.`;
 
-The original diagnosis is provided below as JSON context. Use it to answer questions accurately and specifically — refer to the actual error codes, IPs, domains, and fix steps from the diagnosis rather than speaking generically.
+    const userContent = `Diagnosis context:\n${context}\n\nAgent question: ${messages[messages.length - 1].content}`;
 
-DIAGNOSIS CONTEXT:
-${context}
+    let anthropicRes;
+    try {
+      anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-opus-4-5",
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userContent }],
+        }),
+      });
+    } catch (e) {
+      return res.status(502).json({ error: "Failed to reach Anthropic API: " + e.message });
+    }
 
-BEHAVIOUR:
-- Be concise, direct, and technical where needed but explain jargon when useful.
-- If asked to redraft the customer reply, write a new version and include it in the "updatedCustomerReply" field of your JSON response. Match the voice: warm, peer-to-peer, short sentences, contractions, signed as Adrian, under 120 words, no corporate filler.
-- If NOT asked for a redraft, leave "updatedCustomerReply" as null.
-- Always respond in valid JSON with this exact shape:
-  { "reply": "<your response as plain text>", "updatedCustomerReply": "<new reply text or null>" }
-- Start your response with { and end with }. No markdown fences, no preamble.`;
+    const rawText = await anthropicRes.text();
+    if (!anthropicRes.ok) {
+      let errMsg;
+      try { errMsg = JSON.parse(rawText).error?.message || rawText.slice(0, 300); } catch { errMsg = rawText.slice(0, 300); }
+      return res.status(502).json({ error: "Anthropic API error: " + errMsg });
+    }
 
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+    let anthropicData;
+    try { anthropicData = JSON.parse(rawText); } catch { return res.status(502).json({ error: "Non-JSON from Anthropic: " + rawText.slice(0, 300) }); }
+
+    const content = (anthropicData.content || []).find(b => b.type === "text")?.text || "";
+    const stripped = content.replace(/```json|```/g, "").trim();
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return res.status(502).json({ error: "Could not parse chat response: " + stripped.slice(0, 300) });
+
+    let parsed;
+    try { parsed = JSON.parse(jsonMatch[0]); } catch { return res.status(502).json({ error: "Invalid JSON in chat response" }); }
+
+    return res.status(200).json(parsed);
+  }
+
+  // ── Diagnosis branch ───────────────────────────────────────────────────
+  const { message, base64Image, imageMediaType } = body;
+
+  if (!message && !base64Image) {
+    return res.status(400).json({ error: "Provide a message or a screenshot image" });
+  }
+
+  const systemPrompt = `You are an email deliverability expert assisting a support agent at Exact Hosting, a web and email hosting company.
+Analyse the provided bounce message, NDR, SMTP error, or screenshot and return a structured JSON diagnosis.
+
+Return ONLY valid JSON — no markdown fences, no preamble. Start your response with { and end with }.
+
+JSON shape:
+{
+  "verdict": "short one-line summary of what went wrong",
+  "severity": "critical|warning|ok|unknown",
+  "errorCode": "SMTP code if present, e.g. 550 5.7.1",
+  "rejectingServer": "hostname of the rejecting server if present",
+  "affectedDomain": "sender domain if identifiable",
+  "affectedIP": "sender IP if identifiable",
+  "whatHappened": "2-3 sentence plain-English explanation",
+  "rootCause": "one sentence pinpointing the root cause",
+  "evidence": [
+    { "key": "label", "value": "extracted value", "status": "good|bad|warn|neutral" }
+  ],
+  "fixSteps": ["step 1", "step 2"],
+  "blacklists": [{ "name": "Spamhaus ZEN", "ip": "1.2.3.4" }],
+  "customerReply": "warm customer-facing reply under 120 words, signed as Adrian, no corporate filler"
+}
+
+blacklists array: only populate if the error is a blacklist rejection. Otherwise return [].
+If input is a screenshot, read all visible text and error codes from it before diagnosing.`;
+
+  // Build the user message content array — image first if present, then text
+  const userContentParts = [];
+
+  if (base64Image) {
+    userContentParts.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: imageMediaType || "image/png",
+        data: base64Image,
+      },
+    });
+  }
+
+  const textPart = message
+    ? message
+    : "Please diagnose the mail delivery error shown in the attached screenshot.";
+
+  userContentParts.push({ type: "text", text: textPart });
+
+  let anthropicRes;
+  try {
+    anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -42,109 +132,34 @@ BEHAVIOUR:
       },
       body: JSON.stringify({
         model: "claude-opus-4-5",
-        max_tokens: 1024,
+        max_tokens: 2048,
         system: systemPrompt,
-        messages: messages,
+        messages: [{ role: "user", content: userContentParts }],
       }),
     });
-
-    const rawText = await anthropicRes.text();
-    if (!anthropicRes.ok) {
-      let errMsg;
-      try { errMsg = JSON.parse(rawText).error?.message || rawText.slice(0, 300); } catch { errMsg = rawText.slice(0, 300); }
-      return res.status(500).json({ error: "Anthropic API error: " + errMsg });
-    }
-
-    let anthropicData;
-    try { anthropicData = JSON.parse(rawText); } catch {
-      return res.status(500).json({ error: "Non-JSON from Anthropic: " + rawText.slice(0, 300) });
-    }
-
-    const content = (anthropicData.content || []).map(b => b.text || "").join("");
-    const stripped = content.trim();
-    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return res.status(500).json({ error: "Could not parse chat response: " + stripped.slice(0, 200) });
-    }
-
-    let parsed;
-    try { parsed = JSON.parse(jsonMatch[0]); } catch {
-      return res.status(500).json({ error: "Invalid JSON in chat response" });
-    }
-
-    return res.status(200).json(parsed);
+  } catch (e) {
+    return res.status(502).json({ error: "Failed to reach Anthropic API: " + e.message });
   }
-
-  // ── Diagnosis mode ───────────────────────────────────────────────
-  const { message } = body;
-  if (!message || typeof message !== "string") {
-    return res.status(400).json({ error: "message field required" });
-  }
-
-  const systemPrompt = `You are a senior email deliverability and DNS specialist at Exact Hosting. Analyse the bounce message, NDR, or SMTP error provided and return a structured JSON diagnosis.
-
-Return ONLY valid JSON — no markdown fences, no preamble. Start with { and end with }.
-
-JSON shape:
-{
-  "verdict": "Short one-line summary of what went wrong",
-  "severity": "critical | warning | ok | unknown",
-  "errorCode": "SMTP code if present, else null",
-  "rejectingServer": "hostname of rejecting server if identifiable, else null",
-  "affectedDomain": "sender domain if identifiable, else null",
-  "affectedIP": "sending IP if present, else null",
-  "whatHappened": "Plain English explanation (2-3 sentences)",
-  "rootCause": "Specific root cause sentence, or null",
-  "evidence": [{ "key": "Label", "value": "Value", "status": "good|bad|warn|neutral" }],
-  "fixSteps": ["Step 1", "Step 2"],
-  "customerReply": "Warm, peer-to-peer reply signed as Adrian. Under 120 words. Short sentences. Contractions. No corporate filler. Explain jargon simply.",
-  "blacklists": [{ "name": "Blacklist name", "ip": "IP if known" }]
-}
-
-blacklists should only be populated when the bounce explicitly names a blacklist. Otherwise return [].`;
-
-  const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-opus-4-5",
-      max_tokens: 1500,
-      system: systemPrompt,
-      messages: [{ role: "user", content: message }],
-    }),
-  });
 
   const rawText = await anthropicRes.text();
   if (!anthropicRes.ok) {
     let errMsg;
     try { errMsg = JSON.parse(rawText).error?.message || rawText.slice(0, 300); } catch { errMsg = rawText.slice(0, 300); }
-    return res.status(500).json({ error: "Anthropic API error: " + errMsg });
+    return res.status(502).json({ error: "Anthropic API error: " + errMsg });
   }
 
   let anthropicData;
-  try { anthropicData = JSON.parse(rawText); } catch {
-    return res.status(500).json({ error: "Non-JSON from Anthropic: " + rawText.slice(0, 300) });
-  }
+  try { anthropicData = JSON.parse(rawText); } catch { return res.status(502).json({ error: "Non-JSON from Anthropic: " + rawText.slice(0, 300) }); }
 
-  const content = (anthropicData.content || []).map(b => b.text || "").join("");
-  const stripped = content.trim();
+  const content = (anthropicData.content || []).find(b => b.type === "text")?.text || "";
+  const stripped = content.replace(/```json|```/g, "").trim();
   const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    return res.status(500).json({ error: "Could not parse diagnosis: " + stripped.slice(0, 200) });
-  }
+  if (!jsonMatch) return res.status(502).json({ error: "Could not parse diagnosis: " + stripped.slice(0, 300) });
 
   let parsed;
-  try { parsed = JSON.parse(jsonMatch[0]); } catch {
-    return res.status(500).json({ error: "Invalid JSON in diagnosis response" });
-  }
+  try { parsed = JSON.parse(jsonMatch[0]); } catch { return res.status(502).json({ error: "Invalid JSON in diagnosis response" }); }
 
-  if (!parsed.verdict) {
-    return res.status(500).json({ error: "Unexpected response shape — missing verdict" });
-  }
+  if (!parsed.verdict) return res.status(502).json({ error: "Incomplete diagnosis response" });
 
   return res.status(200).json(parsed);
 };
