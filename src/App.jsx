@@ -44,6 +44,20 @@ const STYLE = `
   textarea::placeholder { color: var(--c-border-md); }
   textarea:focus { border-color: var(--c-tertiary); background: var(--c-surface); }
 
+  /* ── Image attach ─────────────────────────────────────────────── */
+  .img-attach-zone { margin-top: var(--sp-sm); border: 1.5px dashed var(--c-border-md); border-radius: var(--r-sm); padding: var(--sp-md); display: flex; align-items: center; justify-content: center; gap: var(--sp-sm); cursor: pointer; transition: border-color 0.15s, background 0.15s; background: var(--c-neutral); min-height: 64px; }
+  .img-attach-zone:hover, .img-attach-zone.drag-over { border-color: var(--c-tertiary); background: var(--c-blue-bg); }
+  .img-attach-zone-text { font-family: var(--f-mono); font-size: 11px; color: var(--c-secondary); text-align: center; line-height: 1.6; }
+  .img-attach-zone-text span { color: var(--c-tertiary); text-decoration: underline; }
+  .img-attach-zone kbd { display: inline-block; background: var(--c-surface); border: 1px solid var(--c-border-md); border-radius: 3px; font-family: var(--f-mono); font-size: 10px; color: var(--c-secondary); padding: 1px 5px; }
+  .img-preview-row { margin-top: var(--sp-sm); display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); background: var(--c-blue-bg); border: 1px solid var(--c-blue-bd); border-radius: var(--r-sm); }
+  .img-preview-thumb { width: 48px; height: 48px; object-fit: cover; border-radius: var(--r-sm); border: 1px solid var(--c-blue-bd); flex-shrink: 0; }
+  .img-preview-info { flex: 1; }
+  .img-preview-label { font-family: var(--f-mono); font-size: 10px; font-weight: 500; color: var(--c-tertiary); text-transform: uppercase; letter-spacing: 0.1em; }
+  .img-preview-name { font-family: var(--f-mono); font-size: 11px; color: var(--c-on-surface); margin-top: 2px; word-break: break-all; }
+  .img-remove-btn { background: none; border: 1px solid var(--c-red-bd); border-radius: var(--r-sm); color: var(--c-red); font-family: var(--f-mono); font-size: 10px; font-weight: 500; padding: var(--sp-xs) var(--sp-sm); cursor: pointer; white-space: nowrap; transition: all 0.12s; flex-shrink: 0; }
+  .img-remove-btn:hover { background: var(--c-red-bg); }
+
   .chips { display: flex; flex-wrap: wrap; gap: var(--sp-xs); margin-top: var(--sp-sm); align-items: center; }
   .chip-lbl { font-family: var(--f-mono); font-size: 10px; color: var(--c-secondary); }
   .chip { background: var(--c-neutral); border: 1px solid var(--c-border); border-radius: var(--r-sm); font-family: var(--f-mono); font-size: 10px; color: var(--c-secondary); padding: var(--sp-xs) var(--sp-sm); cursor: pointer; transition: all 0.12s; }
@@ -183,6 +197,102 @@ const DELIST_URLS = {
   "MAPS Blackholes":"https://www.mail-abuse.com/cgi-bin/lookup",
   "MAPS Relays":    "https://www.mail-abuse.com/cgi-bin/lookup",
 };
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function getImageMediaType(file) {
+  if (file.type && file.type.startsWith("image/")) return file.type;
+  const ext = file.name.split(".").pop().toLowerCase();
+  const map = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp" };
+  return map[ext] || "image/png";
+}
+
+// ── ImageAttach component ──────────────────────────────────────────────────
+
+function ImageAttach({ image, imagePreview, imageName, imageMediaType, onAttach, onRemove }) {
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
+
+  // Clipboard paste listener
+  useEffect(() => {
+    async function handlePaste(e) {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            const b64 = await fileToBase64(file);
+            const preview = URL.createObjectURL(file);
+            onAttach({ b64, preview, name: "pasted-screenshot.png", mediaType: item.type });
+          }
+          break;
+        }
+      }
+    }
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [onAttach]);
+
+  async function handleFiles(files) {
+    const file = files[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const b64 = await fileToBase64(file);
+    const preview = URL.createObjectURL(file);
+    onAttach({ b64, preview, name: file.name, mediaType: getImageMediaType(file) });
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    handleFiles(e.dataTransfer.files);
+  }
+
+  if (image) {
+    return (
+      <div className="img-preview-row">
+        <img className="img-preview-thumb" src={imagePreview} alt="attached screenshot" />
+        <div className="img-preview-info">
+          <div className="img-preview-label">Screenshot attached</div>
+          <div className="img-preview-name">{imageName}</div>
+        </div>
+        <button className="img-remove-btn" onClick={onRemove}>Remove</button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={"img-attach-zone" + (dragOver ? " drag-over" : "")}
+      onClick={() => fileInputRef.current?.click()}
+      onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onDrop}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={e => handleFiles(e.target.files)}
+      />
+      <div className="img-attach-zone-text">
+        <span>Upload screenshot</span> or drag &amp; drop &nbsp;·&nbsp; <kbd>Ctrl+V</kbd> to paste
+      </div>
+    </div>
+  );
+}
+
+// ── Other components (unchanged) ───────────────────────────────────────────
 
 function DelistPanel({ blacklists }) {
   if (!blacklists || blacklists.length === 0) return null;
@@ -352,7 +462,6 @@ function FollowUpChat({ diagnosisContext, onReplyUpdated }) {
   );
 }
 
-
 function DiagResult({ data }) {
   const [customerReply, setCustomerReply] = useState(data.customerReply || "");
   const sev = data.severity || "unknown";
@@ -418,33 +527,63 @@ function DiagResult({ data }) {
   );
 }
 
+// ── Main App ───────────────────────────────────────────────────────────────
+
 export default function App() {
-  const [input, setInput]     = useState("");
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus]   = useState("");
-  const [result, setResult]   = useState(null);
-  const [error, setError]     = useState("");
-  const [history, setHistory] = useState([]);
-  const [histIdx, setHistIdx] = useState(null);
+  const [input, setInput]           = useState("");
+  const [image, setImage]           = useState(null);       // base64 string
+  const [imagePreview, setImagePreview] = useState(null);   // object URL
+  const [imageName, setImageName]   = useState("");
+  const [imageMediaType, setImageMediaType] = useState("image/png");
+  const [loading, setLoading]       = useState(false);
+  const [status, setStatus]         = useState("");
+  const [result, setResult]         = useState(null);
+  const [error, setError]           = useState("");
+  const [history, setHistory]       = useState([]);
+  const [histIdx, setHistIdx]       = useState(null);
 
   const displayed = histIdx !== null ? history[histIdx]?.result : result;
 
+  function handleAttach({ b64, preview, name, mediaType }) {
+    setImage(b64);
+    setImagePreview(preview);
+    setImageName(name);
+    setImageMediaType(mediaType || "image/png");
+  }
+
+  function handleRemoveImage() {
+    setImage(null);
+    setImagePreview(null);
+    setImageName("");
+    setImageMediaType("image/png");
+  }
+
   async function diagnose() {
-    if (!input.trim() || loading) return;
+    if ((!input.trim() && !image) || loading) return;
     setLoading(true); setResult(null); setError(""); setHistIdx(null);
-    const steps = ["Parsing error message...", "Identifying rejection type...", "Checking SPF / DKIM / DMARC...", "Building diagnosis..."];
+
+    const steps = image && !input.trim()
+      ? ["Reading screenshot...", "Identifying error type...", "Analysing mail headers...", "Building diagnosis..."]
+      : ["Parsing error message...", "Identifying rejection type...", "Checking SPF / DKIM / DMARC...", "Building diagnosis..."];
+
     let si = 0; setStatus(steps[0]);
     const iv = setInterval(() => { si = (si + 1) % steps.length; setStatus(steps[si]); }, 1300);
+
     try {
+      const body = { message: input.trim() };
+      if (image) {
+        body.base64Image = image;
+        body.imageMediaType = imageMediaType;
+      }
+
       const res = await fetch("/api/diagnose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input.trim() })
+        body: JSON.stringify(body)
       });
-      // Read as text first so a non-JSON response (HTML error page) doesn't throw a cryptic parse error
+
       const rawText = await res.text();
       if (!res.ok) {
-        // Try to extract a JSON error message, fall back to raw text (truncated)
         let errMsg;
         try { errMsg = JSON.parse(rawText).error; } catch { errMsg = rawText.slice(0, 300); }
         throw new Error("Server error " + res.status + ": " + errMsg);
@@ -459,7 +598,10 @@ export default function App() {
         throw new Error("Unexpected response shape: " + rawText.slice(0, 300));
       }
       setResult(data);
-      setHistory(h => [{ snippet: input.trim().slice(0, 72) + (input.length > 72 ? "\u2026" : ""), result: data, time: new Date() }, ...h].slice(0, 8));
+      const snippet = input.trim()
+        ? input.trim().slice(0, 72) + (input.length > 72 ? "…" : "")
+        : "[Screenshot] " + imageName;
+      setHistory(h => [{ snippet, result: data, time: new Date() }, ...h].slice(0, 8));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -467,7 +609,15 @@ export default function App() {
     }
   }
 
-  function clear() { setInput(""); setResult(null); setError(""); setHistIdx(null); }
+  function clear() {
+    setInput("");
+    setResult(null);
+    setError("");
+    setHistIdx(null);
+    handleRemoveImage();
+  }
+
+  const canDiagnose = (input.trim() || image) && !loading;
 
   return (
     <>
@@ -476,7 +626,7 @@ export default function App() {
         <div className="header">
           <div className="eyebrow"><span className="pulse" /> Exact Hosting — Internal Tool</div>
           <h1>Bounce Interpreter</h1>
-          <p className="subtitle">Paste any bounce message, NDR, or SMTP error — get a plain-English diagnosis and a customer-ready reply.</p>
+          <p className="subtitle">Paste any bounce message, NDR, or SMTP error — or attach a screenshot — and get a plain-English diagnosis and a customer-ready reply.</p>
         </div>
 
         <div className="input-card">
@@ -487,6 +637,16 @@ export default function App() {
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) diagnose(); }}
           />
+
+          <ImageAttach
+            image={image}
+            imagePreview={imagePreview}
+            imageName={imageName}
+            imageMediaType={imageMediaType}
+            onAttach={handleAttach}
+            onRemove={handleRemoveImage}
+          />
+
           <div className="chips">
             <span className="chip-lbl">Try:</span>
             {EXAMPLES.map((ex, i) => (
@@ -494,11 +654,15 @@ export default function App() {
             ))}
           </div>
           <div className="actions">
-            <button className="btn-primary" onClick={diagnose} disabled={!input.trim() || loading}>
+            <button className="btn-primary" onClick={diagnose} disabled={!canDiagnose}>
               {loading ? "Diagnosing…" : "Diagnose"}
             </button>
-            {(input || result) && <button className="btn-ghost" onClick={clear}>Clear</button>}
-            <span className="char-hint">{input.length > 0 ? `${input.length} chars · Ctrl+Enter` : ""}</span>
+            {(input || result || image) && <button className="btn-ghost" onClick={clear}>Clear</button>}
+            <span className="char-hint">
+              {image && !input.trim() ? "Screenshot ready · " : ""}
+              {input.length > 0 ? `${input.length} chars · ` : ""}
+              {(input.trim() || image) ? "Ctrl+Enter" : ""}
+            </span>
           </div>
         </div>
 
@@ -526,7 +690,7 @@ export default function App() {
             <div className="empty">
               <div className="empty-icon">[!]</div>
               <div className="empty-title">No diagnosis yet</div>
-              <div className="empty-sub">Paste a bounce message above and hit Diagnose, or try one of the quick examples.</div>
+              <div className="empty-sub">Paste a bounce message or attach a screenshot above and hit Diagnose, or try one of the quick examples.</div>
             </div>
           )
         }
